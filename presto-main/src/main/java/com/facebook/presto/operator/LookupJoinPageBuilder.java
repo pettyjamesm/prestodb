@@ -38,6 +38,8 @@ public class LookupJoinPageBuilder
     private final PageBuilder buildPageBuilder;
     private final int buildOutputChannelCount;
     private int estimatedProbeBlockBytes;
+    private int estimatedProbeOutputBytesPerRow = -1;
+    private int previousPosition = -1;
     private boolean isSequentialProbeIndices = true;
 
     public LookupJoinPageBuilder(List<Type> buildTypes)
@@ -63,6 +65,8 @@ public class LookupJoinPageBuilder
         buildPageBuilder.reset();
         estimatedProbeBlockBytes = 0;
         isSequentialProbeIndices = true;
+        previousPosition = -1;
+        estimatedProbeOutputBytesPerRow = -1;
     }
 
     /**
@@ -95,36 +99,45 @@ public class LookupJoinPageBuilder
 
     public Page build(JoinProbe probe)
     {
-        int[] probeIndices = probeIndexBuilder.toIntArray();
-        int length = probeIndices.length;
-        verify(buildPageBuilder.getPositionCount() == length);
+        int outputPositionCount = probeIndexBuilder.size();
+        verify(buildPageBuilder.getPositionCount() == outputPositionCount);
 
         int[] probeOutputChannels = probe.getOutputChannels();
+        // filter the probe side blocks
+        Page probePage = probe.getPage();
         Block[] blocks = new Block[probeOutputChannels.length + buildOutputChannelCount];
-        for (int i = 0; i < probeOutputChannels.length; i++) {
-            Block probeBlock = probe.getPage().getBlock(probeOutputChannels[i]);
-            if (!isSequentialProbeIndices || length == 0) {
-                blocks[i] = probeBlock.getPositions(probeIndices, 0, probeIndices.length);
+        if (!isSequentialProbeIndices || outputPositionCount == 0) {
+            int[] probeIndices = probeIndexBuilder.toIntArray();
+            verify(probeIndices.length == outputPositionCount);
+            for (int i = 0; i < probeOutputChannels.length; i++) {
+                blocks[i] = probePage.getBlock(probeOutputChannels[i]).getPositions(probeIndices, 0, probeIndices.length);
             }
-            else if (length == probeBlock.getPositionCount()) {
-                // probeIndices are a simple covering of the block
-                verify(probeIndices[0] == 0);
-                verify(probeIndices[length - 1] == length - 1);
-                blocks[i] = probeBlock;
+        }
+        else {
+            // output probe positions are sequential without holes
+            int startRegion = probeIndexBuilder.getInt(0);
+            verify(previousPosition - startRegion == outputPositionCount - 1);
+            if (outputPositionCount == probePage.getPositionCount()) {
+                // output positions are a simple covering of the entire probe range
+                verify(startRegion == 0);
+                for (int i = 0; i < probeOutputChannels.length; i++) {
+                    blocks[i] = probePage.getBlock(probeOutputChannels[i]).getLoadedBlock();
+                }
             }
             else {
-                // probeIndices are sequential without holes
-                verify(probeIndices[length - 1] - probeIndices[0] == length - 1);
-                blocks[i] = probeBlock.getRegion(probeIndices[0], length);
+                // extract the target subrange
+                for (int i = 0; i < probeOutputChannels.length; i++) {
+                    blocks[i] = probePage.getBlock(probeOutputChannels[i]).getRegion(startRegion, outputPositionCount);
+                }
             }
         }
 
-        Page buildPage = buildPageBuilder.build();
         int offset = probeOutputChannels.length;
         for (int i = 0; i < buildOutputChannelCount; i++) {
-            blocks[offset + i] = buildPage.getBlock(i);
+            blocks[offset + i] = buildPageBuilder.getBlockBuilder(i).build();
         }
-        return new Page(buildPageBuilder.getPositionCount(), blocks);
+
+        return new Page(outputPositionCount, blocks);
     }
 
     @Override
@@ -139,11 +152,9 @@ public class LookupJoinPageBuilder
     private void appendProbeIndex(JoinProbe probe)
     {
         int position = probe.getPosition();
-        verify(position >= 0);
-        int previousPosition = probeIndexBuilder.isEmpty() ? -1 : probeIndexBuilder.getInt(probeIndexBuilder.size() - 1);
         // positions to be appended should be in ascending order
-        verify(previousPosition <= position);
-        isSequentialProbeIndices &= position == previousPosition + 1 || previousPosition == -1;
+        verify(position >= 0 && previousPosition <= position);
+        isSequentialProbeIndices &= previousPosition == -1 || position == previousPosition + 1;
 
         // Update probe indices and size
         probeIndexBuilder.add(position);
@@ -176,10 +187,11 @@ public class LookupJoinPageBuilder
         if (previousPosition == position) {
             return;
         }
-        for (int index : probe.getOutputChannels()) {
-            Block block = probe.getPage().getBlock(index);
-            // Estimate the size of the current row
-            estimatedProbeBlockBytes += block.getSizeInBytes() / block.getPositionCount();
+        previousPosition = position;
+        // Estimate the size of the current row
+        if (estimatedProbeOutputBytesPerRow < 0) {
+            estimatedProbeOutputBytesPerRow = probe.getEstimatedOutputSizeInBytesPerRow();
         }
+        estimatedProbeBlockBytes += estimatedProbeOutputBytesPerRow;
     }
 }
