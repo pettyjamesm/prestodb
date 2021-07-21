@@ -368,6 +368,22 @@ public final class Page
         return wrapBlocksWithoutCopy(positionCount, blocks);
     }
 
+    public Page extractLoadedChannels(int channel)
+    {
+        return wrapBlocksWithoutCopy(positionCount, new Block[]{this.blocks[channel].getLoadedBlock()});
+    }
+
+    public Page extractLoadedChannels(int... channels)
+    {
+        requireNonNull(channels, "channels is null");
+
+        Block[] blocks = new Block[channels.length];
+        for (int i = 0; i < channels.length; i++) {
+            blocks[i] = this.blocks[channels[i]].getLoadedBlock();
+        }
+        return wrapBlocksWithoutCopy(positionCount, blocks);
+    }
+
     public Page prependColumn(Block column)
     {
         if (column.getPositionCount() != positionCount) {
