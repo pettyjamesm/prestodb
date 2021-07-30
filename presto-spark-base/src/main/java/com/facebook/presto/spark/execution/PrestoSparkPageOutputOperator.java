@@ -22,6 +22,7 @@ import com.facebook.presto.operator.Operator;
 import com.facebook.presto.operator.OperatorContext;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.spi.page.PagesSerde;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OutputPartitioning;
@@ -60,7 +61,7 @@ public class PrestoSparkPageOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> types,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 Optional<OutputPartitioning> outputPartitioning,
                 PagesSerdeFactory serdeFactory)
         {

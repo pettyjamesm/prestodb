@@ -27,6 +27,7 @@ import com.facebook.presto.operator.OperatorContext;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
 import com.facebook.presto.operator.PartitionFunction;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.spi.page.PagesSerde;
 import com.facebook.presto.spi.page.SerializedPage;
 import com.facebook.presto.spi.plan.PlanNodeId;
@@ -75,7 +76,7 @@ public class PartitionedOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> types,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 Optional<OutputPartitioning> outputPartitioning,
                 PagesSerdeFactory serdeFactory)
         {
@@ -102,7 +103,7 @@ public class PartitionedOutputOperator
         private final int operatorId;
         private final PlanNodeId planNodeId;
         private final List<Type> sourceTypes;
-        private final Function<Page, Page> pagePreprocessor;
+        private final PageChannelSelector pagePreprocessor;
         private final PartitionFunction partitionFunction;
         private final List<Integer> partitionChannels;
         private final List<Optional<ConstantExpression>> partitionConstants;
@@ -116,7 +117,7 @@ public class PartitionedOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> sourceTypes,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 PartitionFunction partitionFunction,
                 List<Integer> partitionChannels,
                 List<Optional<ConstantExpression>> partitionConstants,
@@ -183,7 +184,7 @@ public class PartitionedOutputOperator
     }
 
     private final OperatorContext operatorContext;
-    private final Function<Page, Page> pagePreprocessor;
+    private final PageChannelSelector pagePreprocessor;
     private final PagePartitioner partitionFunction;
     private ListenableFuture<?> isBlocked = NOT_BLOCKED;
     private boolean finished;
@@ -191,7 +192,7 @@ public class PartitionedOutputOperator
     public PartitionedOutputOperator(
             OperatorContext operatorContext,
             List<Type> sourceTypes,
-            Function<Page, Page> pagePreprocessor,
+            PageChannelSelector pagePreprocessor,
             PartitionFunction partitionFunction,
             List<Integer> partitionChannels,
             List<Optional<ConstantExpression>> partitionConstants,
@@ -265,7 +266,7 @@ public class PartitionedOutputOperator
             return;
         }
 
-        partitionFunction.partitionPage(pagePreprocessor.apply(page).getLoadedPage());
+        partitionFunction.partitionPage(pagePreprocessor.loadAndApply(page));
     }
 
     @Override

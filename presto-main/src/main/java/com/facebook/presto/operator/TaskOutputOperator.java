@@ -17,6 +17,7 @@ import com.facebook.presto.common.Page;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.buffer.OutputBuffer;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.spi.page.PagesSerde;
 import com.facebook.presto.spi.page.SerializedPage;
 import com.facebook.presto.spi.plan.PlanNodeId;
@@ -51,7 +52,7 @@ public class TaskOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> types,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 Optional<OutputPartitioning> outputPartitioning,
                 PagesSerdeFactory serdeFactory)
         {

@@ -570,7 +570,7 @@ public class LocalExecutionPlanner
         LocalExecutionPlanContext context = new LocalExecutionPlanContext(taskContext, tableWriteInfo);
         PhysicalOperation physicalOperation = plan.accept(new Visitor(session, stageExecutionDescriptor, remoteSourceFactory, pageSinkCommitRequired), context);
 
-        Function<Page, Page> pagePreprocessor = enforceLayoutProcessor(outputLayout, physicalOperation.getLayout());
+        PageChannelSelector pagePreprocessor = enforceLayoutProcessor(outputLayout, physicalOperation.getLayout());
 
         List<Type> outputTypes = outputLayout.stream()
                 .map(VariableReferenceExpression::getType)
@@ -3219,19 +3219,14 @@ public class LocalExecutionPlanner
         };
     }
 
-    private static Function<Page, Page> enforceLayoutProcessor(List<VariableReferenceExpression> expectedLayout, Map<VariableReferenceExpression, Integer> inputLayout)
+    private static PageChannelSelector enforceLayoutProcessor(List<VariableReferenceExpression> expectedLayout, Map<VariableReferenceExpression, Integer> inputLayout)
     {
         int[] channels = expectedLayout.stream()
                 .peek(variable -> checkArgument(inputLayout.containsKey(variable), "channel not found for variable: %s", variable))
                 .mapToInt(inputLayout::get)
                 .toArray();
 
-        if (Arrays.equals(channels, range(0, inputLayout.size()).toArray())) {
-            // this is an identity mapping
-            return Function.identity();
-        }
-
-        return new PageChannelSelector(channels);
+        return PageChannelSelector.create(inputLayout.size(), channels);
     }
 
     private static List<Integer> getChannelsForVariables(Collection<VariableReferenceExpression> variables, Map<VariableReferenceExpression, Integer> layout)

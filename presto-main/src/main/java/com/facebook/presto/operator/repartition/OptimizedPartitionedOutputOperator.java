@@ -39,6 +39,7 @@ import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
 import com.facebook.presto.operator.PartitionFunction;
 import com.facebook.presto.operator.UncheckedStackArrayAllocator;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.spi.page.PagesSerde;
 import com.facebook.presto.spi.page.SerializedPage;
 import com.facebook.presto.spi.plan.PlanNodeId;
@@ -88,7 +89,7 @@ public class OptimizedPartitionedOutputOperator
         implements Operator
 {
     private final OperatorContext operatorContext;
-    private final Function<Page, Page> pagePreprocessor;
+    private final PageChannelSelector pagePreprocessor;
     private final PagePartitioner pagePartitioner;
     private final LocalMemoryContext systemMemoryContext;
     private ListenableFuture<?> isBlocked = NOT_BLOCKED;
@@ -97,7 +98,7 @@ public class OptimizedPartitionedOutputOperator
     public OptimizedPartitionedOutputOperator(
             OperatorContext operatorContext,
             List<Type> sourceTypes,
-            Function<Page, Page> pagePreprocessor,
+            PageChannelSelector pagePreprocessor,
             PartitionFunction partitionFunction,
             List<Integer> partitionChannels,
             List<Optional<ConstantExpression>> partitionConstants,
@@ -173,7 +174,7 @@ public class OptimizedPartitionedOutputOperator
             return;
         }
 
-        pagePartitioner.partitionPage(pagePreprocessor.apply(page).getLoadedPage());
+        pagePartitioner.partitionPage(pagePreprocessor.loadAndApply(page));
 
         systemMemoryContext.setBytes(pagePartitioner.getRetainedSizeInBytes());
     }
@@ -274,7 +275,7 @@ public class OptimizedPartitionedOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> types,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 Optional<OutputPartitioning> outputPartitioning,
                 PagesSerdeFactory serdeFactory)
         {
@@ -301,7 +302,7 @@ public class OptimizedPartitionedOutputOperator
         private final int operatorId;
         private final PlanNodeId planNodeId;
         private final List<Type> sourceTypes;
-        private final Function<Page, Page> pagePreprocessor;
+        private final PageChannelSelector pagePreprocessor;
         private final PartitionFunction partitionFunction;
         private final List<Integer> partitionChannels;
         private final List<Optional<ConstantExpression>> partitionConstants;
@@ -315,7 +316,7 @@ public class OptimizedPartitionedOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> sourceTypes,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 PartitionFunction partitionFunction,
                 List<Integer> partitionChannels,
                 List<Optional<ConstantExpression>> partitionConstants,

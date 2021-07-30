@@ -24,6 +24,7 @@ import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.execution.buffer.PartitionedOutputBuffer;
 import com.facebook.presto.memory.context.SimpleLocalMemoryContext;
 import com.facebook.presto.operator.exchange.LocalPartitionGenerator;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.operator.repartition.PartitionedOutputOperator;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.OutputPartitioning;
@@ -38,7 +39,6 @@ import java.util.OptionalInt;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.Function;
 
 import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
@@ -208,7 +208,7 @@ public class TestPartitionedOutputOperator
         if (shouldReplicate) {
             operatorFactory = new PartitionedOutputOperator.PartitionedOutputFactory(buffer, PARTITION_MAX_MEMORY);
             return (PartitionedOutputOperator) operatorFactory
-                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), REPLICATION_TYPES, Function.identity(), Optional.of(outputPartitioning), serdeFactory)
+                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), REPLICATION_TYPES, PageChannelSelector.identity(), Optional.of(outputPartitioning), serdeFactory)
                     .createOperator(driverContext);
         }
         else {
@@ -217,7 +217,7 @@ public class TestPartitionedOutputOperator
                     buffer,
                     PARTITION_MAX_MEMORY);
             return (PartitionedOutputOperator) operatorFactory
-                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), TYPES, Function.identity(), Optional.of(outputPartitioning), serdeFactory)
+                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), TYPES, PageChannelSelector.identity(), Optional.of(outputPartitioning), serdeFactory)
                     .createOperator(driverContext);
         }
     }

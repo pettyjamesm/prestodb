@@ -25,6 +25,7 @@ import com.facebook.presto.operator.OperatorContext;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.OutputFactory;
 import com.facebook.presto.operator.PartitionFunction;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.spark.execution.PrestoSparkRowBatch.PrestoSparkRowBatchBuilder;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.ConstantExpression;
@@ -77,7 +78,7 @@ public class PrestoSparkRowOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 List<Type> types,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 Optional<OutputPartitioning> outputPartitioning,
                 PagesSerdeFactory serdeFactory)
         {
@@ -147,7 +148,7 @@ public class PrestoSparkRowOutputOperator
         private final int operatorId;
         private final PlanNodeId planNodeId;
         private final PrestoSparkOutputBuffer<PrestoSparkRowBatch> outputBuffer;
-        private final Function<Page, Page> pagePreprocessor;
+        private final PageChannelSelector pagePreprocessor;
         private final PartitionFunction partitionFunction;
         private final List<Integer> partitionChannels;
         private final List<Optional<Block>> partitionConstants;
@@ -159,7 +160,7 @@ public class PrestoSparkRowOutputOperator
                 int operatorId,
                 PlanNodeId planNodeId,
                 PrestoSparkOutputBuffer<PrestoSparkRowBatch> outputBuffer,
-                Function<Page, Page> pagePreprocessor,
+                PageChannelSelector pagePreprocessor,
                 PartitionFunction partitionFunction,
                 List<Integer> partitionChannels,
                 List<Optional<Block>> partitionConstants,
@@ -221,7 +222,7 @@ public class PrestoSparkRowOutputOperator
     private final OperatorContext operatorContext;
     private final LocalMemoryContext systemMemoryContext;
     private final PrestoSparkOutputBuffer<PrestoSparkRowBatch> outputBuffer;
-    private final Function<Page, Page> pagePreprocessor;
+    private final PageChannelSelector pagePreprocessor;
     private final PartitionFunction partitionFunction;
     private final List<Integer> partitionChannels;
     private final List<Optional<Block>> partitionConstants;
@@ -239,7 +240,7 @@ public class PrestoSparkRowOutputOperator
             OperatorContext operatorContext,
             LocalMemoryContext systemMemoryContext,
             PrestoSparkOutputBuffer<PrestoSparkRowBatch> outputBuffer,
-            Function<Page, Page> pagePreprocessor,
+            PageChannelSelector pagePreprocessor,
             PartitionFunction partitionFunction,
             List<Integer> partitionChannels,
             List<Optional<Block>> partitionConstants,
@@ -286,7 +287,7 @@ public class PrestoSparkRowOutputOperator
     @Override
     public void addInput(Page page)
     {
-        page = pagePreprocessor.apply(page);
+        page = pagePreprocessor.loadAndApply(page);
 
         int positionCount = page.getPositionCount();
         if (positionCount == 0) {

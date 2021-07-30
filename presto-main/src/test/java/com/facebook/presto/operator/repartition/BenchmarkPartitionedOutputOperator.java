@@ -32,6 +32,7 @@ import com.facebook.presto.operator.PageAssertions;
 import com.facebook.presto.operator.PartitionFunction;
 import com.facebook.presto.operator.PrecomputedHashGenerator;
 import com.facebook.presto.operator.exchange.LocalPartitionGenerator;
+import com.facebook.presto.operator.exchange.PageChannelSelector;
 import com.facebook.presto.operator.repartition.OptimizedPartitionedOutputOperator.OptimizedPartitionedOutputFactory;
 import com.facebook.presto.operator.repartition.PartitionedOutputOperator.PartitionedOutputFactory;
 import com.facebook.presto.spi.page.SerializedPage;
@@ -64,7 +65,6 @@ import java.util.OptionalInt;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
@@ -311,7 +311,7 @@ public class BenchmarkPartitionedOutputOperator
             OptimizedPartitionedOutputFactory operatorFactory = new OptimizedPartitionedOutputFactory(buffer, MAX_PARTITION_BUFFER_SIZE);
 
             return (OptimizedPartitionedOutputOperator) operatorFactory
-                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), types, Function.identity(), Optional.of(outputPartitioning), serdeFactory)
+                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), types, PageChannelSelector.identity(), Optional.of(outputPartitioning), serdeFactory)
                     .createOperator(createDriverContext());
         }
 
@@ -326,7 +326,7 @@ public class BenchmarkPartitionedOutputOperator
             PartitionedOutputFactory operatorFactory = new PartitionedOutputFactory(buffer, MAX_PARTITION_BUFFER_SIZE);
 
             return (PartitionedOutputOperator) operatorFactory
-                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), types, Function.identity(), Optional.of(outputPartitioning), serdeFactory)
+                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), types, PageChannelSelector.identity(), Optional.of(outputPartitioning), serdeFactory)
                     .createOperator(createDriverContext());
         }
 
