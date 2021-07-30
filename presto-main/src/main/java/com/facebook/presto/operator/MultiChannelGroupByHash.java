@@ -17,8 +17,8 @@ import com.facebook.presto.array.LongBigArray;
 import com.facebook.presto.common.Page;
 import com.facebook.presto.common.PageBuilder;
 import com.facebook.presto.common.block.Block;
-import com.facebook.presto.common.block.BlockBuilder;
 import com.facebook.presto.common.block.DictionaryBlock;
+import com.facebook.presto.common.block.LongArrayBlock;
 import com.facebook.presto.common.block.RunLengthEncodedBlock;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.PrestoException;
@@ -687,8 +687,8 @@ public class MultiChannelGroupByHash
     private class GetNonDictionaryGroupIdsWork
             implements Work<GroupByIdBlock>
     {
-        private final BlockBuilder blockBuilder;
         private final Page page;
+        private final long[] groupIds;
 
         private boolean finished;
         private int lastPosition;
@@ -697,15 +697,13 @@ public class MultiChannelGroupByHash
         {
             this.page = requireNonNull(page, "page is null");
             // we know the exact size required for the block
-            this.blockBuilder = BIGINT.createFixedSizeBlockBuilder(page.getPositionCount());
+            this.groupIds = new long[page.getPositionCount()];
         }
 
         @Override
         public boolean process()
         {
-            int positionCount = page.getPositionCount();
-            checkState(lastPosition <= positionCount, "position count out of bound");
-            checkState(!finished);
+            checkState(!finished && lastPosition < groupIds.length, "process() called after processing completed");
 
             // needRehash() == false indicates we have reached capacity boundary and a rehash is needed.
             // We can only proceed if tryRehash() successfully did a rehash.
@@ -715,31 +713,31 @@ public class MultiChannelGroupByHash
 
             // putIfAbsent will rehash automatically if rehash is needed, unless there isn't enough memory to do so.
             // Therefore needRehash will not generally return true even if we have just crossed the capacity boundary.
-            while (lastPosition < positionCount && !needRehash()) {
+            while (lastPosition < groupIds.length && !needRehash()) {
                 // output the group id for this row
-                BIGINT.writeLong(blockBuilder, putIfAbsent(lastPosition, page));
+                groupIds[lastPosition] = putIfAbsent(lastPosition, page);
                 lastPosition++;
             }
-            return lastPosition == positionCount;
+            return lastPosition == groupIds.length;
         }
 
         @Override
         public GroupByIdBlock getResult()
         {
-            checkState(lastPosition == page.getPositionCount(), "process has not yet finished");
+            checkState(lastPosition == groupIds.length, "process has not yet finished");
             checkState(!finished, "result has produced");
             finished = true;
-            return new GroupByIdBlock(nextGroupId, blockBuilder.build());
+            return new GroupByIdBlock(nextGroupId, new LongArrayBlock(groupIds.length, Optional.empty(), groupIds));
         }
     }
 
     private class GetDictionaryGroupIdsWork
             implements Work<GroupByIdBlock>
     {
-        private final BlockBuilder blockBuilder;
         private final Page page;
         private final Page dictionaryPage;
         private final DictionaryBlock dictionaryBlock;
+        private final long[] groupIds;
 
         private boolean finished;
         private int lastPosition;
@@ -754,15 +752,13 @@ public class MultiChannelGroupByHash
             this.dictionaryPage = createPageWithExtractedDictionary(page);
 
             // we know the exact size required for the block
-            this.blockBuilder = BIGINT.createFixedSizeBlockBuilder(page.getPositionCount());
+            this.groupIds = new long[page.getPositionCount()];
         }
 
         @Override
         public boolean process()
         {
-            int positionCount = page.getPositionCount();
-            checkState(lastPosition < positionCount, "position count out of bound");
-            checkState(!finished);
+            checkState(!finished && lastPosition < groupIds.length, "process() called after processing completed");
 
             // needRehash() == false indicates we have reached capacity boundary and a rehash is needed.
             // We can only proceed if tryRehash() successfully did a rehash.
@@ -772,22 +768,20 @@ public class MultiChannelGroupByHash
 
             // putIfAbsent will rehash automatically if rehash is needed, unless there isn't enough memory to do so.
             // Therefore needRehash will not generally return true even if we have just crossed the capacity boundary.
-            while (lastPosition < positionCount && !needRehash()) {
+            while (lastPosition < groupIds.length && !needRehash()) {
                 int positionInDictionary = dictionaryBlock.getId(lastPosition);
-                int groupId = getGroupId(hashGenerator, dictionaryPage, positionInDictionary);
-                BIGINT.writeLong(blockBuilder, groupId);
-                lastPosition++;
+                groupIds[lastPosition++] = getGroupId(hashGenerator, dictionaryPage, positionInDictionary);
             }
-            return lastPosition == positionCount;
+            return lastPosition == groupIds.length;
         }
 
         @Override
         public GroupByIdBlock getResult()
         {
-            checkState(lastPosition == page.getPositionCount(), "process has not yet finished");
+            checkState(lastPosition == groupIds.length, "process has not yet finished");
             checkState(!finished, "result has produced");
             finished = true;
-            return new GroupByIdBlock(nextGroupId, blockBuilder.build());
+            return new GroupByIdBlock(nextGroupId, new LongArrayBlock(groupIds.length, Optional.empty(), groupIds));
         }
     }
 

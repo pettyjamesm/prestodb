@@ -19,6 +19,7 @@ import com.facebook.presto.common.Page;
 import com.facebook.presto.common.PageBuilder;
 import com.facebook.presto.common.block.Block;
 import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.LongArrayBlock;
 import com.facebook.presto.common.type.BigintType;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.PrestoException;
@@ -28,6 +29,7 @@ import com.google.common.collect.ImmutableList;
 import org.openjdk.jol.info.ClassLayout;
 
 import java.util.List;
+import java.util.Optional;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INSUFFICIENT_RESOURCES;
@@ -139,20 +141,18 @@ public class BigintGroupByHash
     {
         checkArgument(groupId >= 0, "groupId is negative");
         BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(outputChannelOffset);
+        BlockBuilder hashBlockBuilder = outputRawHash ? pageBuilder.getBlockBuilder(outputChannelOffset + 1) : null;
         if (groupId == nullGroupId) {
             blockBuilder.appendNull();
-        }
-        else {
-            BIGINT.writeLong(blockBuilder, valuesByGroupId.get(groupId));
-        }
-
-        if (outputRawHash) {
-            BlockBuilder hashBlockBuilder = pageBuilder.getBlockBuilder(outputChannelOffset + 1);
-            if (groupId == nullGroupId) {
+            if (hashBlockBuilder != null) {
                 BIGINT.writeLong(hashBlockBuilder, NULL_HASH_CODE);
             }
-            else {
-                BIGINT.writeLong(hashBlockBuilder, BigintOperators.hashCode(valuesByGroupId.get(groupId)));
+        }
+        else {
+            long valueForGroupId = valuesByGroupId.get(groupId);
+            BIGINT.writeLong(blockBuilder, valueForGroupId);
+            if (hashBlockBuilder != null) {
+                BIGINT.writeLong(hashBlockBuilder, BigintOperators.hashCode(valueForGroupId));
             }
         }
     }
@@ -161,14 +161,14 @@ public class BigintGroupByHash
     public Work<?> addPage(Page page)
     {
         currentPageSizeInBytes = page.getRetainedSizeInBytes();
-        return new AddPageWork(page.getBlock(hashChannel));
+        return new AddPageWork(page.getBlock(hashChannel).getLoadedBlock());
     }
 
     @Override
     public Work<GroupByIdBlock> getGroupIds(Page page)
     {
         currentPageSizeInBytes = page.getRetainedSizeInBytes();
-        return new GetGroupIdsWork(page.getBlock(hashChannel));
+        return new GetGroupIdsWork(page.getBlock(hashChannel).getLoadedBlock());
     }
 
     @Override
@@ -342,7 +342,7 @@ public class BigintGroupByHash
 
         public AddPageWork(Block block)
         {
-            this.block = requireNonNull(block, "block is null");
+            this.block = requireNonNull(block, "block is null").getLoadedBlock();
         }
 
         @Override
@@ -377,25 +377,23 @@ public class BigintGroupByHash
     private class GetGroupIdsWork
             implements Work<GroupByIdBlock>
     {
-        private final BlockBuilder blockBuilder;
         private final Block block;
+        private final long[] groupIds;
 
         private boolean finished;
         private int lastPosition;
 
         public GetGroupIdsWork(Block block)
         {
-            this.block = requireNonNull(block, "block is null");
+            this.block = requireNonNull(block, "block is null").getLoadedBlock();
             // we know the exact size required for the block
-            this.blockBuilder = BIGINT.createFixedSizeBlockBuilder(block.getPositionCount());
+            this.groupIds = new long[this.block.getPositionCount()];
         }
 
         @Override
         public boolean process()
         {
-            int positionCount = block.getPositionCount();
-            checkState(lastPosition < positionCount, "position count out of bound");
-            checkState(!finished);
+            checkState(!finished && lastPosition < groupIds.length, "process() called after processing completed");
 
             // needRehash() == false indicates we have reached capacity boundary and a rehash is needed.
             // We can only proceed if tryRehash() successfully did a rehash.
@@ -405,21 +403,21 @@ public class BigintGroupByHash
 
             // putIfAbsent will rehash automatically if rehash is needed, unless there isn't enough memory to do so.
             // Therefore needRehash will not generally return true even if we have just crossed the capacity boundary.
-            while (lastPosition < positionCount && !needRehash()) {
+            while (lastPosition < groupIds.length && !needRehash()) {
                 // output the group id for this row
-                BIGINT.writeLong(blockBuilder, putIfAbsent(lastPosition, block));
+                groupIds[lastPosition] = putIfAbsent(lastPosition, block);
                 lastPosition++;
             }
-            return lastPosition == positionCount;
+            return lastPosition == groupIds.length;
         }
 
         @Override
         public GroupByIdBlock getResult()
         {
-            checkState(lastPosition == block.getPositionCount(), "process has not yet finished");
+            checkState(lastPosition == groupIds.length, "process has not yet finished");
             checkState(!finished, "result has produced");
             finished = true;
-            return new GroupByIdBlock(nextGroupId, blockBuilder.build());
+            return new GroupByIdBlock(nextGroupId, new LongArrayBlock(groupIds.length, Optional.empty(), groupIds));
         }
     }
 }
