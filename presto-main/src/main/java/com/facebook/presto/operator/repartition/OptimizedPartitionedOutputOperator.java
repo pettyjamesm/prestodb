@@ -173,8 +173,7 @@ public class OptimizedPartitionedOutputOperator
             return;
         }
 
-        page = pagePreprocessor.apply(page);
-        pagePartitioner.partitionPage(page);
+        pagePartitioner.partitionPage(pagePreprocessor.apply(page).getLoadedPage());
 
         systemMemoryContext.setBytes(pagePartitioner.getRetainedSizeInBytes());
     }

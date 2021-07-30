@@ -265,8 +265,7 @@ public class PartitionedOutputOperator
             return;
         }
 
-        page = pagePreprocessor.apply(page);
-        partitionFunction.partitionPage(page);
+        partitionFunction.partitionPage(pagePreprocessor.apply(page).getLoadedPage());
     }
 
     @Override

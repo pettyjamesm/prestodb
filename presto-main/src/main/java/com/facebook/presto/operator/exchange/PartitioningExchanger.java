@@ -20,7 +20,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.ListenableFuture;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.ints.IntList;
 
 import java.util.List;
 import java.util.Optional;
@@ -35,7 +34,7 @@ class PartitioningExchanger
     private final LocalExchangeMemoryManager memoryManager;
     private final PartitionFunction partitionFunction;
     private final int[] partitioningChannels;
-    private final Optional<Integer> hashChannel;
+    private final int hashChannel; // when < 0, no hash channel is present
     private final IntArrayList[] partitionAssignments;
     private final PageReleasedListener onPageReleased;
 
@@ -50,7 +49,7 @@ class PartitioningExchanger
         this.memoryManager = requireNonNull(memoryManager, "memoryManager is null");
         this.partitionFunction = requireNonNull(partitionFunction, "partitionFunction is null");
         this.partitioningChannels = Ints.toArray(requireNonNull(partitioningChannels, "partitioningChannels is null"));
-        this.hashChannel = requireNonNull(hashChannel, "hashChannel is null");
+        this.hashChannel = requireNonNull(hashChannel, "hashChannel is null").orElse(-1);
         this.onPageReleased = PageReleasedListener.forLocalExchangeMemoryManager(memoryManager);
 
         partitionAssignments = new IntArrayList[partitions.size()];
@@ -60,25 +59,35 @@ class PartitioningExchanger
     }
 
     @Override
-    public synchronized void accept(Page page)
+    public void accept(Page page)
     {
-        // reset the assignment lists
-        for (IntList partitionAssignment : partitionAssignments) {
-            partitionAssignment.clear();
-        }
+        // Ensure that the whole page is loaded and LazyBlocks unwrapped before acquiring the lock
+        Page inputPage = page.getLoadedPage();
+        partition(inputPage, extractPartitioningChannels(inputPage));
+    }
 
-        // assign each row to a partition
-        Page partitioningChannelsPage = extractPartitioningChannels(page);
+    private synchronized void partition(Page inputPage, Page partitioningChannelsPage)
+    {
+        // assign each row to a partition, assignments lists are expected to have been reset and ready
         for (int position = 0; position < partitioningChannelsPage.getPositionCount(); position++) {
             int partition = partitionFunction.getPartition(partitioningChannelsPage, position);
             partitionAssignments[partition].add(position);
         }
 
         // build a page for each partition
-        for (int partition = 0; partition < buffers.size(); partition++) {
+        for (int partition = 0; partition < partitionAssignments.length; partition++) {
             IntArrayList positions = partitionAssignments[partition];
-            if (!positions.isEmpty()) {
-                Page pageSplit = page.copyPositions(positions.elements(), 0, positions.size());
+            int partitionPositions = positions.size();
+            if (partitionPositions > 0) {
+                Page pageSplit;
+                if (partitionPositions == inputPage.getPositionCount()) {
+                    pageSplit = inputPage; // all rows assigned to this partition, no copy necessary
+                }
+                else {
+                    pageSplit = inputPage.copyPositions(positions.elements(), 0, partitionPositions);
+                }
+                // reset the assignments list for future use
+                positions.clear();
                 memoryManager.updateMemoryUsage(pageSplit.getRetainedSizeInBytes());
                 buffers.get(partition).accept(new PageReference(pageSplit, 1, onPageReleased));
             }
@@ -88,8 +97,8 @@ class PartitioningExchanger
     private Page extractPartitioningChannels(Page inputPage)
     {
         // hash value is pre-computed, only needs to extract that channel
-        if (hashChannel.isPresent()) {
-            return new Page(inputPage.getBlock(hashChannel.get()));
+        if (hashChannel >= 0) {
+            return inputPage.extractChannel(hashChannel);
         }
 
         // extract partitioning channels
