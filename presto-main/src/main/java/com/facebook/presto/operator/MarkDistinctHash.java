@@ -16,8 +16,8 @@ package com.facebook.presto.operator;
 import com.facebook.presto.Session;
 import com.facebook.presto.common.Page;
 import com.facebook.presto.common.block.Block;
-import com.facebook.presto.common.block.ByteArrayBlock;
 import com.facebook.presto.common.block.RunLengthEncodedBlock;
+import com.facebook.presto.common.type.BooleanType;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.sql.gen.JoinCompiler;
 import com.google.common.annotations.VisibleForTesting;
@@ -30,6 +30,9 @@ import static com.facebook.presto.operator.GroupByHash.createGroupByHash;
 
 public class MarkDistinctHash
 {
+    private static final Block SINGLE_FALSE_BLOCK = BooleanType.wrapByteArrayAsBlock(1, Optional.empty(), new byte[]{0});
+    private static final Block SINGLE_TRUE_BLOCK = BooleanType.wrapByteArrayAsBlock(1, Optional.empty(), new byte[]{1});
+
     private final GroupByHash groupByHash;
     private long nextDistinctId;
 
@@ -62,15 +65,25 @@ public class MarkDistinctHash
     private Block processNextGroupByIdsBlock(GroupByIdBlock ids)
     {
         if (ids.getGroupCount() == nextDistinctId) {
-            // no new distinct values, return RLE block of false value
-            return new RunLengthEncodedBlock(new ByteArrayBlock(1, Optional.empty(), new byte[]{0}), ids.getPositionCount());
+            // no new distinct values, return RLE block of false
+            return new RunLengthEncodedBlock(SINGLE_FALSE_BLOCK, ids.getPositionCount());
         }
-        byte[] distinctMask = new byte[ids.getPositionCount()];
-        for (int i = 0; i < distinctMask.length; i++) {
-            byte isDistinct = ids.getGroupId(i) == nextDistinctId ? (byte) 1 : (byte) 0;
-            distinctMask[i] = isDistinct;
-            nextDistinctId += isDistinct;
+        long initialNextId = nextDistinctId;
+        int positionCount = ids.getPositionCount();
+        byte[] distinctMask = new byte[positionCount];
+        for (int i = 0; i < positionCount; i++) {
+            if (ids.getGroupId(i) == nextDistinctId) {
+                distinctMask[i] = 1;
+                nextDistinctId++;
+            }
+            else {
+                distinctMask[i] = 0;
+            }
         }
-        return new ByteArrayBlock(distinctMask.length, Optional.empty(), distinctMask);
+        if (initialNextId + positionCount == nextDistinctId) {
+            // all rows are distinct, return RLE block of true
+            return new RunLengthEncodedBlock(SINGLE_TRUE_BLOCK, positionCount);
+        }
+        return BooleanType.wrapByteArrayAsBlock(positionCount, Optional.empty(), distinctMask);
     }
 }

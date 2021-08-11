@@ -16,10 +16,13 @@ package com.facebook.presto.common.type;
 import com.facebook.presto.common.block.Block;
 import com.facebook.presto.common.block.BlockBuilder;
 import com.facebook.presto.common.block.BlockBuilderStatus;
+import com.facebook.presto.common.block.ByteArrayBlock;
 import com.facebook.presto.common.block.ByteArrayBlockBuilder;
 import com.facebook.presto.common.block.PageBuilderStatus;
 import com.facebook.presto.common.block.UncheckedBlock;
 import com.facebook.presto.common.function.SqlFunctionProperties;
+
+import java.util.Optional;
 
 import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 
@@ -28,6 +31,16 @@ public final class BooleanType
         implements FixedWidthType
 {
     public static final BooleanType BOOLEAN = new BooleanType();
+
+    /**
+     * This static method is defined to serve as a public contract that BooleanType blocks can be represented
+     * as ByteArrayBlocks concretely. This allows certain operators to safely construct BooleanType blocks via
+     * primitive byte arrays instead of via block builders, and know that this contract still holds.
+     */
+    public static Block wrapByteArrayAsBlock(int positionCount, Optional<boolean[]> valueIsNull, byte[] values)
+    {
+        return new ByteArrayBlock(positionCount, valueIsNull, values);
+    }
 
     private BooleanType()
     {
