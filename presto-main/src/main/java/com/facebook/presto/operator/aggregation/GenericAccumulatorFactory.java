@@ -26,6 +26,7 @@ import com.facebook.presto.common.block.ColumnarRow;
 import com.facebook.presto.common.block.LongArrayBlock;
 import com.facebook.presto.common.block.RowBlock;
 import com.facebook.presto.common.block.RowBlockBuilder;
+import com.facebook.presto.common.block.RunLengthEncodedBlock;
 import com.facebook.presto.common.block.SortOrder;
 import com.facebook.presto.common.type.ArrayType;
 import com.facebook.presto.common.type.RowType;
@@ -259,7 +260,7 @@ public class GenericAccumulatorFactory
     {
         private final Accumulator accumulator;
         private final MarkDistinctHash hash;
-        private final Optional<Integer> maskChannel;
+        private final int maskChannel;
 
         private DistinctingAccumulator(
                 Accumulator accumulator,
@@ -271,7 +272,7 @@ public class GenericAccumulatorFactory
                 UpdateMemory updateMemory)
         {
             this.accumulator = requireNonNull(accumulator, "accumulator is null");
-            this.maskChannel = requireNonNull(maskChannel, "maskChannel is null");
+            this.maskChannel = requireNonNull(maskChannel, "maskChannel is null").orElse(-1);
 
             hash = new MarkDistinctHash(
                     session,
@@ -309,9 +310,13 @@ public class GenericAccumulatorFactory
         public void addInput(Page page)
         {
             // 1. filter out positions based on mask, if present
-            Page filtered = maskChannel
-                    .map(channel -> filter(page, page.getBlock(channel)))
-                    .orElse(page);
+            Page filtered;
+            if (maskChannel >= 0) {
+                filtered = filter(page, page.getBlock(maskChannel));
+            }
+            else {
+                filtered = page;
+            }
 
             if (filtered.getPositionCount() == 0) {
                 return;
@@ -353,12 +358,21 @@ public class GenericAccumulatorFactory
 
     private static Page filter(Page page, Block mask)
     {
+        if (mask instanceof RunLengthEncodedBlock && page.getPositionCount() > 0) {
+            if (BOOLEAN.getBoolean(mask, 0)) {
+                return page; // no positions filtered
+            }
+            return page.getPositions(new int[0], 0, 0); // all positions filtered
+        }
         int[] ids = new int[mask.getPositionCount()];
         int next = 0;
         for (int i = 0; i < page.getPositionCount(); ++i) {
             if (BOOLEAN.getBoolean(mask, i)) {
                 ids[next++] = i;
             }
+        }
+        if (next == page.getPositionCount()) {
+            return page; // no positions filtered
         }
 
         return page.getPositions(ids, 0, next);
@@ -369,7 +383,7 @@ public class GenericAccumulatorFactory
     {
         private final GroupedAccumulator accumulator;
         private final MarkDistinctHash hash;
-        private final Optional<Integer> maskChannel;
+        private final int maskChannel;
 
         private DistinctingGroupedAccumulator(
                 GroupedAccumulator accumulator,
@@ -381,7 +395,7 @@ public class GenericAccumulatorFactory
                 UpdateMemory updateMemory)
         {
             this.accumulator = requireNonNull(accumulator, "accumulator is null");
-            this.maskChannel = requireNonNull(maskChannel, "maskChannel is null");
+            this.maskChannel = requireNonNull(maskChannel, "maskChannel is null").orElse(-1);
 
             List<Type> types = ImmutableList.<Type>builder()
                     .add(BIGINT) // group id column
@@ -426,17 +440,28 @@ public class GenericAccumulatorFactory
             Page withGroup = page.prependColumn(groupIdsBlock);
 
             // 1. filter out positions based on mask, if present
-            Page filtered = maskChannel
-                    .map(channel -> filter(withGroup, withGroup.getBlock(channel + 1))) // offset by one because of group id in column 0
-                    .orElse(withGroup);
+            Page filtered;
+            if (maskChannel >= 0) {
+                filtered = filter(withGroup, withGroup.getBlock(maskChannel + 1)); // offset by one because of group id in column 0
+                if (filtered.getPositionCount() == 0) {
+                    return; // all positions filtered by the mask
+                }
+                // update the groupIdsBlock after filtering
+                if (filtered.getBlock(0) instanceof GroupByIdBlock) {
+                    groupIdsBlock = (GroupByIdBlock) filtered.getBlock(0);
+                }
+                else {
+                    groupIdsBlock = new GroupByIdBlock(groupIdsBlock.getGroupCount(), filtered.getBlock(0));
+                }
+            }
+            else {
+                filtered = withGroup;
+            }
 
             // 2. compute a mask for the distinct rows (including the group id)
             Work<Block> work = hash.markDistinctRows(filtered);
             checkState(work.process());
             Block distinctMask = work.getResult();
-
-            // 3. feed a Page with a new mask to the underlying aggregation
-            GroupByIdBlock groupIds = new GroupByIdBlock(groupIdsBlock.getGroupCount(), filtered.getBlock(0));
 
             // drop the group id column and prepend the distinct mask column
             Block[] columns = new Block[filtered.getChannelCount()];
@@ -445,7 +470,7 @@ public class GenericAccumulatorFactory
                 columns[i] = filtered.getBlock(i);
             }
 
-            accumulator.addInput(groupIds, new Page(filtered.getPositionCount(), columns));
+            accumulator.addInput(groupIdsBlock, new Page(filtered.getPositionCount(), columns));
         }
 
         @Override
@@ -663,10 +688,9 @@ public class GenericAccumulatorFactory
             // groupIdsBlock = [2, 1, 0]. The resultant groupIdCount would be [3, 2, 1]. This is because there are
             // 3 values for groupId 0, 2 values for groupId 1, and 1 value for groupId 2. The index into groupIdCount
             // represents the groupId while the value is the total number of values for that groupId.
+            groupIdCount.ensureCapacity(groupIdsBlock.getGroupCount());
             for (int i = 0; i < groupIdsBlock.getPositionCount(); i++) {
-                long currentGroupId = groupIdsBlock.getGroupId(i);
-                groupIdCount.ensureCapacity(currentGroupId);
-                groupIdCount.increment(currentGroupId);
+                groupIdCount.increment(groupIdsBlock.getGroupId(i));
             }
         }
 
