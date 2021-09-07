@@ -280,13 +280,12 @@ public class BigintGroupByHash
                 long hashPosition = getHashPosition(value, mask);
                 // look for an empty slot or a slot containing this key
                 while (true) {
-                    int groupId = groupIds.get(hashPosition);
-                    if (groupId == -1) {
-                        groupId = nextGroupId++;
+                    int groupId = groupIds.setEmptyOrGetCurrent(hashPosition, nextGroupId);
+                    if (groupId == nextGroupId) {
+                        nextGroupId++;
                         // record group id in hash
                         values.set(hashPosition, value);
                         valuesByGroupId.set(groupId, value);
-                        groupIds.set(hashPosition, groupId);
                         break;
                     }
 
@@ -524,7 +523,7 @@ public class BigintGroupByHash
             checkState(lastPosition == block.getPositionCount(), "process has not yet finished");
             checkState(!finished, "result has produced");
             finished = true;
-            return new GroupByIdBlock(groupByHash.nextGroupId, new LongArrayBlock(lastPosition, Optional.empty(), groupIds));
+            return new GroupByIdBlock(groupByHash.getGroupCount(), new LongArrayBlock(lastPosition, Optional.empty(), groupIds));
         }
     }
 }

@@ -79,6 +79,18 @@ public final class IntBigArray
         return array[segment(index)][offset(index)];
     }
 
+    public int setEmptyOrGetCurrent(long index, int value)
+    {
+        int offset = offset(index);
+        int[] segment = array[segment(index)];
+        int current = segment[offset];
+        if (current == initialValue) {
+            segment[offset] = value;
+            return value;
+        }
+        return current;
+    }
+
     /**
      * Sets the element of this big array at specified index.
      *
