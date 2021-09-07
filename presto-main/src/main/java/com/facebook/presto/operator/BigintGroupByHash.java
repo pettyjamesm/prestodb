@@ -221,9 +221,8 @@ public class BigintGroupByHash
     {
         int hashCollisions = 0;
         int processedCount = 0;
-        boolean mayHaveNull = block.mayHaveNull();
         for (int position = offset; position < block.getPositionCount() && nextGroupId < maxFill; position++) {
-            if (mayHaveNull && block.isNull(position)) {
+            if (block.isNull(position)) {
                 if (nullGroupId < 0) {
                     // set null group id
                     nullGroupId = nextGroupId++;
@@ -236,13 +235,12 @@ public class BigintGroupByHash
                 // look for an empty slot or a slot containing this key
                 int groupId;
                 do {
-                    groupId = groupIds.get(hashPosition);
-                    if (groupId == -1) {
-                        groupId = nextGroupId++;
+                    groupId = groupIds.setEmptyOrGetCurrent(hashPosition, nextGroupId);
+                    if (groupId == nextGroupId) {
+                        nextGroupId++;
                         // record group id in hash
                         values.set(hashPosition, value);
                         valuesByGroupId.set(groupId, value);
-                        groupIds.set(hashPosition, groupId);
                         positionGroupIds[position] = groupId;
                         break;
                     }
@@ -263,13 +261,79 @@ public class BigintGroupByHash
         return processedCount;
     }
 
+    private static int getGroupIdsForAllNonNull(long[] positionGroupIds, Block block, int offset, IntBigArray groupIds, LongBigArray values, LongBigArray valuesByGroupId, int mask, int nextGroupId, int maxFill, StateUpdateHandler updateHandler)
+    {
+        int hashCollisions = 0;
+        int processedCount = 0;
+        for (int position = offset; position < block.getPositionCount() && nextGroupId < maxFill; position++) {
+            long value = BIGINT.getLong(block, position);
+            long hashPosition = getHashPosition(value, mask);
+            // look for an empty slot or a slot containing this key
+            int groupId;
+            do {
+                groupId = groupIds.setEmptyOrGetCurrent(hashPosition, nextGroupId);
+                if (groupId == nextGroupId) {
+                    nextGroupId++;
+                    // record group id in hash
+                    values.set(hashPosition, value);
+                    valuesByGroupId.set(groupId, value);
+                    positionGroupIds[position] = groupId;
+                    break;
+                }
+
+                if (value == values.get(hashPosition)) {
+                    break;
+                }
+
+                // increment position and mask to handle wrap around
+                hashPosition = (hashPosition + 1) & mask;
+                hashCollisions++;
+            } while (true);
+            positionGroupIds[position] = groupId;
+            processedCount++;
+        }
+        updateHandler.updateInternalState(nextGroupId, hashCollisions, -1);
+        return processedCount;
+    }
+
+    private static int putAllNonNullIfAbsent(Block block, int offset, IntBigArray groupIds, LongBigArray values, LongBigArray valuesByGroupId, int mask, int nextGroupId, int maxFill, StateUpdateHandler updateHandler)
+    {
+        int hashCollisions = 0;
+        int processedCount = 0;
+        for (int position = offset; position < block.getPositionCount() && nextGroupId < maxFill; position++) {
+            long value = BIGINT.getLong(block, position);
+            long hashPosition = getHashPosition(value, mask);
+            // look for an empty slot or a slot containing this key
+            while (true) {
+                int groupId = groupIds.setEmptyOrGetCurrent(hashPosition, nextGroupId);
+                if (groupId == nextGroupId) {
+                    nextGroupId++;
+                    // record group id in hash
+                    values.set(hashPosition, value);
+                    valuesByGroupId.set(groupId, value);
+                    break;
+                }
+
+                if (value == values.get(hashPosition)) {
+                    break;
+                }
+
+                // increment position and mask to handle wrap around
+                hashPosition = (hashPosition + 1) & mask;
+                hashCollisions++;
+            }
+            processedCount++;
+        }
+        updateHandler.updateInternalState(nextGroupId, hashCollisions, -1);
+        return processedCount;
+    }
+
     private static int putAllIfAbsent(Block block, int offset, IntBigArray groupIds, LongBigArray values, LongBigArray valuesByGroupId, int mask, int nextGroupId, int maxFill, int nullGroupId, StateUpdateHandler updateHandler)
     {
         int hashCollisions = 0;
         int processedCount = 0;
-        boolean mayHaveNull = block.mayHaveNull();
         for (int position = offset; position < block.getPositionCount() && nextGroupId < maxFill; position++) {
-            if (mayHaveNull && block.isNull(position)) {
+            if (block.isNull(position)) {
                 if (nullGroupId < 0) {
                     // set null group id
                     nullGroupId = nextGroupId++;
@@ -432,8 +496,14 @@ public class BigintGroupByHash
     {
         StateUpdateHandler updateHandler = this::handleStateUpdate;
         int processed = 0;
+        boolean mayHaveNull = block.getPositionCount() > 0 && block.mayHaveNull();
         while (offset + processed < block.getPositionCount() && (!needRehash() || tryRehash())) {
-            processed += putAllIfAbsent(block, offset + processed, groupIds, values, valuesByGroupId, mask, nextGroupId, maxFill, nullGroupId, updateHandler);
+            if (mayHaveNull) {
+                processed += putAllIfAbsent(block, offset + processed, groupIds, values, valuesByGroupId, mask, nextGroupId, maxFill, nullGroupId, updateHandler);
+            }
+            else {
+                processed += putAllNonNullIfAbsent(block, offset + processed, groupIds, values, valuesByGroupId, mask, nextGroupId, maxFill, updateHandler);
+            }
         }
         return processed;
     }
@@ -442,8 +512,14 @@ public class BigintGroupByHash
     {
         StateUpdateHandler updateHandler = this::handleStateUpdate;
         int processed = 0;
+        boolean mayHaveNull = block.getPositionCount() > 0 && block.mayHaveNull();
         while (offset + processed < blockGroupIds.length && (!needRehash() || tryRehash())) {
-            processed += getGroupIdsForAll(blockGroupIds, block, offset + processed, groupIds, values, valuesByGroupId, mask, nextGroupId, maxFill, nullGroupId, updateHandler);
+            if (mayHaveNull) {
+                processed += getGroupIdsForAll(blockGroupIds, block, offset + processed, groupIds, values, valuesByGroupId, mask, nextGroupId, maxFill, nullGroupId, updateHandler);
+            }
+            else {
+                processed += getGroupIdsForAllNonNull(blockGroupIds, block, offset + processed, groupIds, values, valuesByGroupId, mask, nextGroupId, maxFill, updateHandler);
+            }
         }
         return processed;
     }
@@ -452,10 +528,13 @@ public class BigintGroupByHash
     {
         this.nextGroupId = nextGroupId;
         this.hashCollisions += hashCollisions;
-        this.nullGroupId = nullGroupId;
+        if (nullGroupId >= 0 && this.nullGroupId != nullGroupId) {
+            checkState(this.nullGroupId < 0);
+            this.nullGroupId = nullGroupId;
+        }
     }
 
-    private static class AddPageWork
+    private static final class AddPageWork
             implements Work<Void>
     {
         private final BigintGroupByHash groupByHash;
